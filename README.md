@@ -226,9 +226,9 @@ Three layers:
 
 ---
 
-## Challenges Faced — Real Problems, Real Fixes
+## Challenges Faced
 
-These are the actual problems I hit while building this system, not theoretical ones.
+These are the actual problems I hit while building this system
 
 ---
 

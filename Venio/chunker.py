@@ -5,10 +5,23 @@ from typing import List, Dict
 
 
 def clean_text(text: str) -> str:
-    """Sanitize text: normalize whitespace, remove control chars."""
+    """Sanitize text: remove known noise patterns, normalize whitespace."""
+    # Remove known noise patterns
+    text = re.sub(r'---\s*PAGE BREAK\s*---', '', text)
+    text = re.sub(r'\$\$\$.*?\$\$\$', '', text)
+    text = re.sub(r'#{3,}', '', text)
+    text = re.sub(r'\?{2,}', '', text)
+    text = re.sub(r'!{2,}', '', text)
+    # Collapse whitespace
     text = re.sub(r"[^\S\n]+", " ", text)   # collapse spaces (keep newlines)
     text = re.sub(r"\n{3,}", "\n\n", text)   # max 2 newlines
     return text.strip()
+
+
+def is_meaningful(text: str, min_length: int = 100) -> bool:
+    """Check if text has enough real alphabetic content to be useful."""
+    alpha_only = re.sub(r'[^a-zA-Z\s]', '', text)
+    return len(alpha_only.strip()) >= min_length
 
 
 def extract_email_body(text: str) -> str:
@@ -85,6 +98,12 @@ def chunk_documents(documents: List[Dict], max_chunk_size: int = 500, overlap: i
         # For emails, chunk just the body
         if doc["document_type"] == "email":
             content = extract_email_body(content)
+
+        content = clean_text(content)
+
+        # Skip documents with insufficient meaningful content
+        if not is_meaningful(content):
+            continue
 
         chunks = semantic_chunk(content, max_chunk_size, overlap)
 

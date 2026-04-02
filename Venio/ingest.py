@@ -85,13 +85,29 @@ def ingest_documents(data_dir: str) -> List[Dict]:
         if meta.get("document_type") == "email" and fname.endswith(".txt"):
             email_headers = parse_email_headers(content)
 
+        # Determine document_type with override rules:
+        # Rule 1: "irrelevant*" files → irrelevant
+        # Rule 2: ALL .pdf files → irrelevant (noise in this dataset)
+        # Rule 3: "email*.txt" files → email
+        # Rule 4: Any other .txt → txt
+        if fname.startswith("irrelevant"):
+            doc_type = "irrelevant"
+        elif fname.endswith(".pdf"):
+            doc_type = "irrelevant"
+        elif fname.startswith("email") and fname.endswith(".txt"):
+            doc_type = "email"
+        elif fname.endswith(".txt"):
+            doc_type = "txt"
+        else:
+            doc_type = meta.get("document_type", "unknown")
+
         doc = {
             "document_id": meta.get("document_id", fname),
             "file_name": fname,
             "content": content,
             "date": meta.get("date", email_headers.get("date", "unknown")),
             "author": meta.get("author", email_headers.get("from", "unknown")),
-            "document_type": meta.get("document_type", "unknown"),
+            "document_type": doc_type,
         }
         documents.append(doc)
 

@@ -1,7 +1,3 @@
-"""
-Venio Smart - Streamlit UI
-Interactive web interface for the document intelligence pipeline.
-"""
 
 import streamlit as st
 from main import build_index, query_pipeline
@@ -32,22 +28,55 @@ if query:
     with st.spinner("Processing query..."):
         result = query_pipeline(query, store, top_k=top_k)
 
-    # Show parsed intent
+    # SECTION 1 — Intent & Filters
     with st.expander("Parsed Intent & Filters", expanded=False):
-        st.json(result["intent"])
+        intent = result["intent"]
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Year", intent.get("year") or "—")
+        col2.metric("Author", intent.get("author") or "—")
+        col3.metric("Document Type", intent.get("document_type") or "—")
+        col4.metric("Search Query", intent.get("search_query") or "—")
+        st.markdown("**ChromaDB Filter Applied:**")
         if result["filter"]:
             st.json(result["filter"])
+        else:
+            st.info("No metadata filter applied")
 
-    # Show answer
+    # SECTION 2 — Answer
     st.subheader("Answer")
-    st.markdown(result["answer"])
+    answer = result["answer"]
+    if "do not contain sufficient information" in answer:
+        st.warning(answer)
+    else:
+        st.success(answer)
 
-    # Show source documents
+    # SECTION 3 — Source Documents
     st.subheader("Source Documents")
-    for i, r in enumerate(result["results"], 1):
-        m = r["metadata"]
-        with st.expander(f"[{i}] {m['file_name']} — {m['author']} ({m['date']}) | distance: {r['distance']:.3f}"):
-            st.text(r["content"])
+    if result["results"]:
+        for i, r in enumerate(result["results"], 1):
+            m = r["metadata"]
+            with st.expander(
+                f"[{i}] {m['file_name']} — {m['author']} ({m['date']}) | distance: {r['distance']:.3f}"
+            ):
+                st.markdown(f"**File:** {m['file_name']}")
+                st.markdown(f"**Author:** {m['author']}")
+                st.markdown(f"**Date:** {m['date']}")
+                st.markdown(f"**Type:** {m['document_type']}")
+                st.markdown(f"**Distance:** {r['distance']:.4f}")
+                st.markdown("**Content:**")
+                st.text(r["content"])
+    else:
+        st.info("No source documents retrieved.")
+
+    # SECTION 4 — Debug Info
+    if st.checkbox("Show Debug Info", value=False):
+        st.markdown("---")
+        st.subheader("Debug Info")
+        st.markdown(f"**Chunks retrieved:** {len(result['results'])}")
+        st.markdown("**Raw Intent:**")
+        st.json(result["intent"])
+        st.markdown("**Raw Filter:**")
+        st.json(result["filter"] if result["filter"] else {})
 
 # Sample queries
 st.sidebar.header("Sample Queries")

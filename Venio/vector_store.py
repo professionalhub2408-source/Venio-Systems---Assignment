@@ -1,8 +1,4 @@
-"""
-Venio Smart - Vector Store Module
-Handles embeddings via sentence-transformers and storage via ChromaDB.
-Uses BAAI/bge-m3 for 1024-dim dense embeddings.
-"""
+
 
 import os
 import chromadb
@@ -78,13 +74,19 @@ class VectorStore:
         """
         query_embedding = self.model.encode([query], normalize_embeddings=True).tolist()
 
+        # Always exclude irrelevant documents from search
+        base_filter = {"document_type": {"$ne": "irrelevant"}}
+        if where_filter:
+            combined_filter = {"$and": [base_filter, where_filter]}
+        else:
+            combined_filter = base_filter
+
         kwargs = {
             "query_embeddings": query_embedding,
             "n_results": n_results,
             "include": ["documents", "metadatas", "distances"],
+            "where": combined_filter,
         }
-        if where_filter:
-            kwargs["where"] = where_filter
 
         results = self.collection.query(**kwargs)
 

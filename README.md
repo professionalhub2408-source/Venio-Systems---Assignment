@@ -1,6 +1,5 @@
-
-
-> Built by Deepak Balivada |
+# Venio Smart — Document Intelligence Pipeline
+> Built by Deepak Balivada 
 
 ---
 
@@ -8,7 +7,7 @@
 
 eDiscovery is the process of finding legally relevant documents inside massive collections — emails, contracts, reports, PDFs — during investigations or litigation. The problem is scale and precision. You cannot manually read 10,000 files. You need a system that understands *what you're looking for*, not just what words you typed.
 
-Venio Smart ingests raw documents, understands their content and metadata, and lets users ask natural language questions like *"Find financial discussions from 2021 by John Smith"* — returning cited, grounded answers pulled directly from the source documents. No hallucinated summaries. No guessing. Every claim traced back to a file.
+**Venio Smart** ingests raw documents, understands their content and metadata, and lets users ask natural language questions like *"Find financial discussions from 2021 by John Smith"* — returning cited, grounded answers pulled directly from the source documents. No hallucinated summaries. No guessing. Every claim traced back to a file.
 
 ---
 
@@ -129,10 +128,11 @@ Venio Smart ingests raw documents, understands their content and metadata, and l
 
 ---
 
- ### Why I Chose This Architecture — Research & Design Decisions
+## Why I Chose This Architecture — Research & Design Decisions
 
+### 1. Embedding Model — BGE-M3 over OpenAI
 
-### Most RAG tutorials default to OpenAI's embedding API. I didn't, for two reasons.
+Most RAG tutorials default to OpenAI's embedding API. I didn't, for two reasons.
 
 **Reason 1 — Privacy.** This is an eDiscovery system. Legal documents contain privileged communications, PII, financial records. Sending that data to an external API is a liability. BGE-M3 runs fully local — nothing leaves the machine.
 
@@ -226,6 +226,90 @@ Three layers:
 
 ---
 
+## Challenges Faced — Real Problems, Real Fixes
+
+These are the actual problems I hit while building this system, not theoretical ones.
+
+---
+
+### Challenge 1: ChromaDB Metadata Filter Returning Zero Results
+
+**What happened:**
+My first queries kept returning zero results even though I could see the documents were indexed. The metadata filter was silently failing.
+
+**Root cause:**
+ChromaDB's where-clause requires exact type matching. My metadata stored year as a string `"2021"` but my filter was querying it as an integer `{year: {$eq: 2021}}`. ChromaDB didn't throw an error — it just returned nothing.
+
+**Fix:**
+Standardized all metadata to strings at ingest time. Year stored as `"2021"`, filter uses `{$eq: "2021"}`. Added a schema validation step in `vector_store.py` that enforces types before upsert.
+
+**Lesson:** Always validate metadata types before storage. Silent type mismatches in vector databases are hard to debug.
+
+---
+
+### Challenge 2: LLM Intent Parser Returning Malformed JSON
+
+**What happened:**
+Llama 3.2:1b would sometimes return JSON wrapped in markdown code blocks like ` ```json {...} ``` ` instead of raw JSON. `json.loads()` would crash the pipeline.
+
+**Fix:**
+Added a JSON extraction wrapper that strips markdown fences before parsing:
+```python
+def extract_json(text):
+    text = re.sub(r"```json|```", "", text).strip()
+    return json.loads(text)
+```
+Also added a full try/except fallback that switches to regex-based extraction if JSON parsing fails entirely. The dual-layer design (LLM + regex fallback) means the pipeline never crashes due to LLM formatting errors.
+
+---
+
+### Challenge 3: Email Headers Polluting Embeddings
+
+**What happened:**
+Early retrieval results were dominated by header matches. Query `"financial discussions"` would retrieve emails because `From: finance@company.com` was embedded as part of the chunk content — the word "finance" in an email address was matching semantically.
+
+**Fix:**
+Built `extract_email_body()` in `chunker.py` that detects structured header blocks using regex (`^From:`, `^To:`, `^Date:`, `^Subject:`) and strips them from chunk content before embedding. Headers are preserved separately as structured metadata fields — so they're still searchable through the filter layer, just not polluting the semantic embedding space.
+
+---
+
+### Challenge 4: BGE-M3 First-Load Latency
+
+**What happened:**
+BGE-M3 is a large model (~570MB). First load from disk took 8-12 seconds, which made the system feel broken on first query.
+
+**Fix:**
+Moved embedding model initialization to startup time rather than per-query time. The model loads once when the pipeline starts and stays in memory. Added a loading indicator in the Streamlit UI so users know the system is warming up rather than hanging.
+
+---
+
+### Challenge 5: Noisy PDF Pages Breaking Chunking
+
+**What happened:**
+Several PDFs in the dataset had pages that returned `None` from PyPDF2 — either blank pages or scanned images with no extractable text. These `None` values would crash `clean_text()` downstream.
+
+**Fix:**
+Added explicit None-check in `read_pdf()`:
+```python
+for page in pdf.pages:
+    text = page.extract_text()
+    if text:  # skip None and empty pages
+        pages.append(text)
+```
+Also added `errors="replace"` to all text file reads to handle malformed UTF-8 encoding without crashing.
+
+---
+
+### Challenge 6: Qwen 2.5:7b Slow on First Generation
+
+**What happened:**
+On a mid-range RTX 2050 GPU, Qwen 2.5:7b takes 4-6 seconds per generation. For an interactive CLI this feels slow. Running it for intent parsing too made every query take 10+ seconds.
+
+**Fix:**
+This is the core reason for the dual LLM design. Routing the structured extraction task (intent parsing) to Llama 3.2:1b (1B params, ~0.8s) and only using Qwen 2.5:7b for the final answer generation cut total latency roughly in half on consumer hardware.
+
+---
+
 ## What Would Break at 1 Million Documents
 
 | Component | Current limit | Production fix |
@@ -236,15 +320,6 @@ Three layers:
 | Ollama local inference | Single-threaded, no concurrent requests | vLLM for batched inference or cloud endpoint with rate limiting |
 | Year-only date filter | `{year: {$eq: 2021}}` — can't do date ranges | Store date as ISO string, use `$gte`/`$lte` range operators |
 | No audit log | No record of what was queried or returned | Append-only query log: timestamp, query, filters applied, doc IDs returned |
-
----
-
-## What This System Is Missing (Honest Assessment)
-
-- **PII Detection** — in real eDiscovery, emails contain SSNs, account numbers, personal addresses. A production system needs a spaCy NER layer at ingest time to tag and optionally redact PII before indexing.
-- **Date range filtering** — currently filters by exact year. Real legal queries need "between March 2020 and December 2021."
-- **Query audit log** — every query, filter applied, and documents returned should be logged with timestamps for legal defensibility.
-- **Evaluation metrics** — no automated retrieval quality measurement. Would add precision@K and NDCG against a labeled test set.
 
 ---
 
@@ -289,7 +364,7 @@ cd Venio
 pip install -r requirements.txt
 ```
 
-### Run — Three ways
+### Run — Three Ways
 
 **CLI (interactive)**
 ```bash
@@ -332,3 +407,18 @@ What contracts were signed in 2020?
 Summarize HR policy documents from Sarah Lee
 Find all reports about budget planning
 ```
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| Embeddings | BAAI/bge-m3 | Local, hybrid dense+sparse, privacy-safe |
+| Vector DB | ChromaDB | Native metadata filtering before search |
+| Intent Parsing | Llama 3.2:1b via Ollama | Fast, local, structured JSON extraction |
+| Answer Generation | Qwen 2.5:7b via Ollama | Strong reasoning, citation-aware |
+| PDF Parsing | PyPDF2 | Lightweight, page-level control |
+| Web UI | Streamlit | Fast prototyping, interactive filters |
+| REST API | FastAPI | Production-ready, auto Swagger docs |
+| Chunking | Custom semantic chunker | Paragraph-first, legal-document-aware |
